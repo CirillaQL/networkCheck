@@ -189,7 +189,7 @@ func FindPodNetworkMonitor(namespace, pod string) bool {
 		}
 		return true
 	default:
-		fmt.Println("Wrong data format. Can't handle prometheus data")
+		fmt.Println("Wrong data format.")
 		return false
 	}
 }
