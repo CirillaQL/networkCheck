@@ -22,7 +22,7 @@ jobs:
           node-version: 18
 
       - name: Install code-review-gpt
-        run: npm install code-review-gpt
+        run: npm install -g code-review-gpt
 
       - name: Run code review script
         run: npx code-review-gpt review --ci=github
