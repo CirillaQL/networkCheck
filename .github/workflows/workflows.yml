@@ -11,6 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    environment: preview
 
     steps:
       - uses: actions/checkout@v2
@@ -22,10 +23,10 @@ jobs:
           node-version: 18
 
       - name: Install code-review-gpt
-        run: npm install -g code-review-gpt
+        run: npm install code-review-gpt
 
       - name: Run code review script
-        run: npx code-review-gpt review --ci=github
+        run: npx code-review-gpt review --ci
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
