@@ -1,0 +1,71 @@
+# ---
+# apiVersion: v1
+# kind: ServiceAccount
+# metadata:
+#   name: network-check
+#   namespace: sre
+# ---
+# apiVersion: rbac.authorization.k8s.io/v1
+# kind: ClusterRole
+# metadata:
+#   name: network-check-role
+# rules:
+#   - apiGroups: ["", "apps"]
+#     resources: ["deployments", "cronjobs", "daemonsets", "statefulsets", "pods"]
+#     verbs: ["get", "watch", "list", "update"]
+# ---
+# apiVersion: rbac.authorization.k8s.io/v1
+# kind: ClusterRoleBinding
+# metadata:
+#   name: network-check-binding
+# subjects:
+# - kind: ServiceAccount
+#   name: network-check
+#   namespace: sre
+# roleRef:
+#   kind: ClusterRole
+#   name: network-check-role
+#   apiGroup: rbac.authorization.k8s.io
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  labels:
+    app: network-check
+  name: network-check
+  namespace: sre
+spec:
+  schedule: "0 22 * * *"
+  jobTemplate:
+    metadata:
+      labels:
+        app: network-check
+    spec:
+      activeDeadlineSeconds: 1800
+      template:
+        spec:
+          restartPolicy: "Never"
+          volumes:
+            - name: "cm-sre-network-check"
+              configMap:
+                name: "network-check"
+                items:
+                  - key: "config.yaml"
+                    path: "config.yaml"
+                    mode: 420
+                defaultMode: 292
+          containers:
+            - name: network-check
+              image: frankcox/networkcheck:latest # image url
+              imagePullPolicy: Always
+              resources: 
+                limits: 
+                  cpu: "500m"
+                  memory: "500M"
+                requests: 
+                  cpu: "50m"
+                  memory: "250M"
+              volumeMounts:
+                - name: "cm-sre-network-check"
+                  mountPath: "/app/config.yaml"
+                  subPath: "config.yaml"
+          serviceAccountName: network-check
