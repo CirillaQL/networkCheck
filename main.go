@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
+
 	"github.com/prometheus/common/model"
 	"gopkg.in/yaml.v2"
 	appsv1 "k8s.io/api/apps/v1"
@@ -10,8 +13,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"os"
-	"strings"
 
 	"github.com/prometheus/client_golang/api"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
@@ -100,7 +101,7 @@ func NewFlowLogClient(config Config) {
 		},
 		Debug:           false,
 		BlockBufferSize: 10,
-		ClientInfo: clickhouse.ClientInfo{ // optional, please see Client info section in the README.md
+		ClientInfo: clickhouse.ClientInfo{
 			Products: []struct {
 				Name    string
 				Version string
