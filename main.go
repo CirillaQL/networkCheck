@@ -27,6 +27,7 @@ type Config struct {
 	DeepflowHost               string   `yaml:"deepflow_host"`
 	DeepflowClickhouseUsername string   `yaml:"deepflow_clickhouse_username"`
 	DeepflowClickhousePassword string   `yaml:"deepflow_clickhouse_password"`
+	DeepflowCheckDays          int      `yaml:"deepflow_check_days"`
 	IgnoreNamespaces           []string `yaml:"ignore_namespaces"`
 	IgnoreDeployments          []string `yaml:"ignore_deployments"`
 	IgnoreAnnotations          string   `yaml:"ignore_annotations"`
