@@ -2,11 +2,12 @@ name: Network Check CICD
 
 on:
   pull_request:
-    branches: [master]
+    types: [opened, synchronize, reopened]
 
 permissions:
   pull-requests: write
   contents: read
+  issues: write
 
 jobs:
   build:
@@ -14,28 +15,31 @@ jobs:
     environment: preview
 
     steps:
-      - uses: actions/checkout@v2
+      - name: Checkout code
+        uses: actions/checkout@v2
         with:
           fetch-depth: 0
-          
-      - name: Code Review GPT
-        uses: mattzcarey/code-review-gpt@v0.1.4-alpha
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v2
         with:
+          node-version: 18
+
+      - name: Install code-review-gpt
+        working-directory: ./code-review-gpt
+        run: npm install code-review-gpt
+
+      - name: List Modified Files (Debugging Step)
+        run: |
+          git fetch origin ${{ github.base_ref }}
+          git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }}
+
+      - name: Run Code Review GPT
+        working-directory: ./code-review-gpt
+        run: npx code-review-gpt review --ci=github --model=$MODEL --base-sha=$BASE_SHA --head-sha=$HEAD_SHA
+        env:
+          MODEL: gpt-3.5-turbo
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          MODEL: 'gpt-3.5-turbo'
-          GITHUB_TOKEN: ${{ github.token }}
-
-      # - uses: actions/setup-node@v3
-      #   with:
-      #     node-version: 18
-
-      # - name: Install code-review-gpt
-      #   run: npm install code-review-gpt
-
-      # - name: Run code review script
-      #   run: npx code-review-gpt review --ci=github --model=gpt-3.5-turbo
-      #   env:
-      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      #     BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      #     GITHUB_SHA: ${{ github.sha }}
-      #     OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}  
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
