@@ -55,7 +55,7 @@ spec:
                 defaultMode: 292
           containers:
             - name: network-check
-              image: frankcox/networkcheck:latest # image url
+              image: frankcox/networkcheck:latest
               imagePullPolicy: Always
               resources: 
                 limits: 
