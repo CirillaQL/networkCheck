@@ -15,30 +15,36 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
+
+      - name: AI Code Reviewer
+        uses: CirillaQL/ai-code-reviewer@main
         with:
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v2
-        with:
-          node-version: 18
-
-      - name: Install code-review-gpt
-        working-directory: ./code-review-gpt
-        run: npm install code-review-gpt
-
-      - name: List Modified Files (Debugging Step)
-        run: |
-          git fetch origin ${{ github.base_ref }}
-          git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }}
-
-      - name: Run Code Review GPT
-        working-directory: ./code-review-gpt
-        run: npx code-review-gpt review --ci=github --model=$MODEL --base-sha=$BASE_SHA --head-sha=$HEAD_SHA
-        env:
-          MODEL: gpt-3.5-turbo
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # The GITHUB_TOKEN is there by default so you just need to keep it like it is and not necessarily need to add it as secret as it will throw an error. [More Details](https://docs.github.com/en/actions/security-guides/automatic-token-authentication#about-the-github_token-secret)
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_MODEL: "gpt-4" # Optional: defaults to "gpt-4"
+          exclude: "**/*.json, **/*.md" 
+
+      # - name: Setup Node.js
+      #   uses: actions/setup-node@v2
+      #   with:
+      #     node-version: 18
+
+      # - name: Install code-review-gpt
+      #   working-directory: ./code-review-gpt
+      #   run: npm install code-review-gpt
+
+      # - name: List Modified Files (Debugging Step)
+      #   run: |
+      #     git fetch origin ${{ github.base_ref }}
+      #     git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }}
+
+      # - name: Run Code Review GPT
+      #   working-directory: ./code-review-gpt
+      #   run: npx code-review-gpt review --ci=github --model=$MODEL --base-sha=$BASE_SHA --head-sha=$HEAD_SHA
+      #   env:
+      #     MODEL: gpt-3.5-turbo
+      #     OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      #     BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      #     HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
