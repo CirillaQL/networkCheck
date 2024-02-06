@@ -9,7 +9,6 @@ import (
 	"github.com/prometheus/common/model"
 	"gopkg.in/yaml.v2"
 	appsv1 "k8s.io/api/apps/v1"
-	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -33,6 +32,8 @@ type Config struct {
 	IgnoreAnnotations          string   `yaml:"ignore_annotations"`
 	PrometheusHost             string   `yaml:"prometheus_host"`
 	SafeScale                  bool     `yaml:"safe_scale"`
+	ScaleEnable                bool     `yaml:"scale_enable"`
+	UseDeepflow                bool     `yaml:"use_deepflow"`
 }
 
 func loadConfig() Config {
@@ -94,7 +95,7 @@ func NewFlowLogClient(config Config) {
 			Password: config.DeepflowClickhousePassword,
 		},
 		Settings: clickhouse.Settings{
-			"max_execution_time": 120,
+			"max_execution_time": 300,
 		},
 		DialTimeout: time.Second * 30,
 		Compression: &clickhouse.Compression{
@@ -115,33 +116,6 @@ func NewFlowLogClient(config Config) {
 	conn.SetMaxOpenConns(10)
 	conn.SetConnMaxLifetime(time.Hour)
 	FlowLogConn = conn
-}
-
-func IsDaemonSetPod(pod *apiv1.Pod) bool {
-	controllerRef := metav1.GetControllerOf(pod)
-	if controllerRef != nil && controllerRef.Kind == "DaemonSet" {
-		return true
-	}
-	return false
-}
-
-func IsJobPod(pod *apiv1.Pod) bool {
-	controllerRef := metav1.GetControllerOf(pod)
-	if controllerRef != nil && controllerRef.Kind == "Job" {
-		return true
-	}
-	return false
-}
-
-func FindControllerOf(pod *apiv1.Pod) string {
-	controllerRef := metav1.GetControllerOf(pod)
-	if controllerRef == nil {
-		fmt.Printf("找不到Controller, PodName: %s, Namespace: %s \n", pod.Name, pod.Namespace)
-		return ""
-	} else {
-		return controllerRef.Kind
-	}
-
 }
 
 func FindPodNetworkMonitor(namespace, pod string) bool {
@@ -195,6 +169,31 @@ func FindPodNetworkMonitor(namespace, pod string) bool {
 	}
 }
 
+func CheckDeploymentAffinity(deployment *appsv1.Deployment) bool {
+	if deployment.Spec.Template.Spec.Affinity != nil {
+		affinity := deployment.Spec.Template.Spec.Affinity
+		if affinity.NodeAffinity != nil {
+			if affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution != nil {
+				if len(affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms) > 0 {
+					nodeSelectorTerms := affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+					for _, term := range nodeSelectorTerms {
+						if len(term.MatchExpressions) > 0 {
+							for _, match := range term.MatchExpressions {
+								for _, value := range match.Values {
+									if value == "load" || value == "staging" {
+										return true
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
 func main() {
 	startTime := time.Now()
 	config := loadConfig()
@@ -216,8 +215,10 @@ func main() {
 	}
 
 	nowTime := time.Now()
-	//yesterdayTime := nowTime.AddDate(0, 0, -1)
-	todayString := fmt.Sprintf("%s 00:00:00.000", nowTime.Format("2006-01-02"))
+	deltaDay := 0 - config.DeepflowCheckDays
+	wantDayTime := nowTime.AddDate(0, 0, deltaDay)
+
+	todayString := fmt.Sprintf("%s 00:00:00.000", wantDayTime.Format("2006-01-02"))
 
 	deployments, err := clientset.AppsV1().Deployments("").List(context.Background(), metav1.ListOptions{})
 	if err != nil {
@@ -260,6 +261,10 @@ func main() {
 			continue
 		}
 
+		if CheckDeploymentAffinity(&deployment) {
+			continue
+		}
+
 		// 获取每个 Deployment 控制的 Pods
 		set := deployment.Spec.Selector.MatchLabels
 		listOptions := metav1.ListOptions{LabelSelector: metav1.FormatLabelSelector(metav1.SetAsLabelSelector(set))}
@@ -270,44 +275,55 @@ func main() {
 		}
 
 		for _, pod := range pods.Items {
-			selectSQL := "SELECT id from flow_tag.pod_map WHERE name = '" + pod.Name + "';"
-			rows, err := FlowTagConn.Query(selectSQL)
-			if err != nil {
-				fmt.Printf("从Deepflow获取Pod: %s Namespace: %s 对应的id失败, Error: %v \n", pod.Name, pod.Namespace, err)
+			networkCheck := FindPodNetworkMonitor(pod.Namespace, pod.Name)
+			if networkCheck {
+				fmt.Printf("Deployment Pod: %s Namespace: %s 没有网络流量记录，可以直接缩容 \n", pod.Name, pod.Namespace)
+				if config.ScaleEnable {
+					ScaleDownDeployment(&deployment, clientset)
+				}
 				continue
 			}
-
-			for rows.Next() {
-				var id int
-				err = rows.Scan(&id)
+			if !config.UseDeepflow {
+				// 是否使用deepflow进行检查？如果不适用，可以直接略过
+				continue
+			} else {
+				selectSQL := "SELECT id from flow_tag.pod_map WHERE name = '" + pod.Name + "';"
+				rows, err := FlowTagConn.Query(selectSQL)
 				if err != nil {
 					fmt.Printf("从Deepflow获取Pod: %s Namespace: %s 对应的id失败, Error: %v \n", pod.Name, pod.Namespace, err)
 					continue
 				}
-				findLogRecord := fmt.Sprintf("SELECT EXISTS(SELECT * FROM flow_log.l7_flow_log WHERE (pod_id_0 = %d OR pod_id_1 = %d OR auto_instance_id_0 = %d OR auto_instance_id_1 = %d) AND endpoint NOT ILIKE '%%health%%' AND endpoint NOT ILIKE '%%healthz%%' AND endpoint NOT ILIKE '%%ready%%' AND endpoint NOT ILIKE '%%readyz%%' AND endpoint NOT ILIKE '%%readiness%%'  AND endpoint NOT ILIKE '%%metric%%' AND end_time > '%s' LIMIT 1);", id, id, id, id, todayString)
-				logRows := FlowLogConn.QueryRow(findLogRecord)
-				count := 0
-				err := logRows.Scan(&count)
-				if err != nil {
-					fmt.Printf("从Deepflow获取Pod: %s Namespace: %s 对应的日志记录失败, Error: %v \n", pod.Name, pod.Namespace, err)
-					continue
-				}
-				if count == 0 {
-					if !config.SafeScale {
-						// 危险缩容，只要deepflow里匹配不到就直接缩容
-						fmt.Printf("Deployment Pod: %s Namespace: %s 在deepflow中查不到记录，危险模式下可以缩容 \n", pod.Name, pod.Namespace)
-					} else {
-						// 安全缩容，需要同时判断deepflow里没有记录和没有Network_receive记录，即完全没有流量，才进行缩容
-						networkCheck := FindPodNetworkMonitor(pod.Namespace, pod.Name)
-						if networkCheck {
-							fmt.Printf("Deployment Pod: %s Namespace: %s 完全不存在网络连接情况，安全模式下可以缩容 \n", pod.Name, pod.Namespace)
+
+				for rows.Next() {
+					var id int
+					err = rows.Scan(&id)
+					if err != nil {
+						fmt.Printf("从Deepflow获取Pod: %s Namespace: %s 对应的id失败, Error: %v \n", pod.Name, pod.Namespace, err)
+						continue
+					}
+					findLogRecord := fmt.Sprintf("SELECT EXISTS(SELECT * FROM flow_log.l7_flow_log WHERE (pod_id_0 = %d OR pod_id_1 = %d) AND end_time > '%s' LIMIT 1);", id, id, todayString)
+					logRows := FlowLogConn.QueryRow(findLogRecord)
+					count := 0
+					err := logRows.Scan(&count)
+					if err != nil {
+						fmt.Printf("从Deepflow获取Pod: %s Namespace: %s 对应的日志记录失败, Error: %v \n", pod.Name, pod.Namespace, err)
+						continue
+					}
+					if count == 0 {
+						if !config.SafeScale {
+							// 危险缩容，只要deepflow里匹配不到就直接缩容
+							fmt.Printf("Deployment Pod: %s Namespace: %s 有流量但在deepflow中查不到记录，危险模式下可以缩容 \n", pod.Name, pod.Namespace)
+							if config.ScaleEnable {
+								ScaleDownDeployment(&deployment, clientset)
+							}
 						} else {
 							fmt.Printf("Deployment Pod: %s Namespace: %s 存在进出流量，但deepflow查询不到实际流量网络连接情况，安全模式下不缩容 \n", pod.Name, pod.Namespace)
 						}
+						fmt.Println("-------------------------------------------------------------------------")
 					}
-					fmt.Println("-------------------------------------------------------------------------")
 				}
 			}
+
 		}
 	}
 	endTime := time.Now()
@@ -321,6 +337,8 @@ func ScaleDownDeployment(deployment *appsv1.Deployment, clientset *kubernetes.Cl
 	var zeroReplica int32 = 0
 	if *deployment.Spec.Replicas >= 1 {
 		deployment.Spec.Replicas = &zeroReplica
+	} else {
+		return
 	}
 	scaledDeployment, err := clientset.AppsV1().Deployments(deployment.Namespace).Update(context.Background(), deployment, metav1.UpdateOptions{})
 	if err != nil || *scaledDeployment.Spec.Replicas != 0 {
